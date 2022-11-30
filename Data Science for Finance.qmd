@@ -1,86 +1,112 @@
 ---
-title: "dtsc_5301_final_project"
+title: "DTSC 5301 Group Project: Data Science for Finace: Tactical Asset Allocation with a Bubble Signal"
 ---
 
 # Data Science for Finance
 
 ## Introduction
 
-Exchange Traded Funds (ETFs) have become a popular investment vehicle over the past few years. In this noteboo, we compare the performance of two portfolios: an equally weighted portfolio and a portfolio whose weights are determined by a bubble indicator.
+Tactical asset allocation (TAA) is an active portfolio management practice where a portfolio manager allocates percentages of their assets toward certain categories of financial instruments based on some signal. In this notebook, we compare the performance of two portfolios: an equally weighted portfolio and a portfolio whose weights are determined by a bubble signal. When there is a strong bubble signal we allocate to a risk-off portfolio compromised fully of debt instruments. When there is a strong negative bubble signal we allocate to a risk-on portfolio comprised fully of equity instruments. When there is neither a strong positive or negative bubble signal, we allocate to a 60/40 portfolio where 60% of our assets are in equity and 40% are in debt instruments. Below are the exchange traded funds we use for our analysis. We compare the cumulative returns for our bubble portfolio to a 60/40 portfolio from `START_DATE` to `END_DATE`.
 
 | ETF Ticker                                                                              | Allocation | Underlying Asset | Description                                                                                                                                                                   |
-|:--------------|:--------------|:--------------|:--------------------------|
+|:----------------|:----------------|:----------------|:--------------------|
 | [VTI](https://investor.vanguard.com/etf/profile/VTI)                                    | 20%        | Equity           | Seeks to track the performance of the CRSP US Total Market Index. Large- mid- and small-cap equity diversified across growth and value styles.                                |
 | [VTV](https://investor.vanguard.com/etf/profile/VTV)                                    | 20%        | Equity           | Seeks to track the performance of the CRSP US Large Cap Value Index which measures the investment return of large-capitalization value stocks.                                |
 | [VBR](https://investor.vanguard.com/etf/profile/VBR)                                    | 20%        | Equity           | Seeks to track the performance of the CRSP US Small Cap Value Index which measures the investment return of small-capitalization value stocks.                                |
 | [TLT](https://www.ishares.com/us/products/239454/ishares-20-year-treasury-bond-etf)     | 20%        | Debt             | The iShares 20+ Year Treasury Bond ETF seeks to track the investment results of an index composed of U.S. Treasury bonds with remaining maturities greater than twenty years. |
 | [AGG](https://www.ishares.com/us/products/239458/ishares-core-total-us-bond-market-etf) | 20%        | Debt             | The iShares Core U.S. Aggregate Bond ETF seeks to track the investment results of an index composed of the total U.S. investment-grade bond market.                           |
 
-Since the equally weighted portfolio represents 60% equities and 40% debt a fair benchmark could be 60% VTI (Total Equity Market) and 40% AGG (Total Bond Market). This benchmark is created in the **Organizing Data Building Benchmark & Portfolio Determining Cumulative Returns** section.
-
 ## General Imports and Constants
 
 ```{r}
-install.packages('tidyverse')
-install.packages('dplyr')
+#install.packages('tidyverse')
+#install.packages('dplyr')
+library('tidyverse')
 library('ggplot2')
 library('dplyr')
-POS_BUBBLE_THRESHOLD = 0.08
-NEG_BUBBLE_THRESHOLD = 0.02
+POS_BUBBLE_THRESHOLD = 0.15 # explained later in notebook
+NEG_BUBBLE_THRESHOLD = 0.15 # explained later in notebook
 ```
 
 ## Fetching Universe Data (Yahoo! Finance)
 
-Yahoo! Finance computes an Adjusted Closing price that factors in all splits and dividends. https://help.yahoo.com/kb/SLN28256.html Here we are simply loading the datasets that were previously fetched from Yahoo! Finance.
+Yahoo! Finance computes an Adjusted Closing price that factors in all splits and dividends, see [here](https://help.yahoo.com/kb/SLN28256.html). For the sake of simplicity and reproduce-ability, in our analysis, we are simply loading the data sets that were previously fetched from Yahoo! Finance.
 
 ```{r}
-# read universe.csv into df var
-df <- read.csv('data/universe.csv')
-
-# create a 60/40 portfolio
-df$Benchmark <- apply(df[2:6], 1, mean)
-
-ggplot(df, aes(x=as.Date(Date))) + geom_line(aes(y=Benchmark))
+# read universe.csv into df var, set Date col as row name
+df <- read.csv('data/universe.csv', row.names = 'Date')
+head(df)
 ```
 
-## Organizing Data, Building Benchmark & Portfolio, Determining Cumulative Returns
+## Creating the Benchmark
 
 ```{r}
-# stuff
+# compute daily percent change
+df_pct_chg <- na.omit((df-lag(df, 1))/lag(df, 1))
+
+# create a 60/40 portfolio
+df_pct_chg$Benchmark <- apply(df_pct_chg, 1, mean)
+df_pct_chg$BenchmarkCumulativeReturns <- cumprod(1+df_pct_chg$Benchmark)-1
+
+# add date as a col of type Date
+df_pct_chg$Date = as.Date(rownames(df_pct_chg))
+df_pct_chg
+
+# visualize it
+ggplot(df_pct_chg, aes(x=Date)) + geom_line(aes(y=BenchmarkCumulativeReturns))
+```
+
+```{r}
+df_pct_chg
 ```
 
 ## Bubble Model
 
-Is it possible to avoid the large drawdowns discovered in the drawdown analysis? Here we use the [Log-Periodic Power Law Singularity (LPPLS) Model](https://en.wikipedia.org/wiki/Didier_Sornette#The_JLS_and_LPPLS_models). It describes a bubble as a faster-than-exponential increase in asset price that reflects positive feedback loop of higher return anticipations competing with negative feedback spirals of crash expectations. A bubble has a distinct signature that resembles a power law with a finite-time singularity decorated by oscillations with a frequency increasing with time.
+Is it possible to avoid the large draw-downs and capitalize on the run-ups? Here we use the [Log-Periodic Power Law Singularity (LPPLS) Model](https://en.wikipedia.org/wiki/Didier_Sornette#The_JLS_and_LPPLS_models). It describes a bubble as a faster-than-exponential increase in asset price that reflects positive feedback loop of higher return anticipations competing with negative feedback spirals of crash expectations. A bubble has a distinct signature that resembles a power law with a finite-time singularity decorated by oscillations with a frequency increasing with time.
 
-If we can identify bubbles in an equity benchmark, perhaps we could use that as a signal to weight our portfolio more heavily towards the less risky debt assets (AGG and TLT).
+If we can identify bubbles, then we can use them as an indicator for our tactical asset allocation strategy.
 
-The first step is to compute the bubble indicators for the benchmark. Here I'm going to find bubbles in the VTI instrument, since it is total market.
+The first step is to compute the bubble indicators for the benchmark. Here we are importing the signal pre-computed from Boulder Investment Technologies GitHub Repository. This data has been de-trended prior to analysis so as to obtain a evenly distributed number of positive and negative bubbles.
 
 ### Load Bubble Data
 
 ```{r}
-bubble_df<- read.csv('data/confidence.csv')
-bubble_df
+bubble_df<- read.csv('data/confidence.csv', row.names='time')
+bubble_df$Date <- as.Date(rownames(bubble_df))
+
+# create unified conf score as pos_cong-neg_conf
+bubble_df$conf = bubble_df$pos_conf - bubble_df$neg_conf
+head(bubble_df)
 ```
 
 ### Visualize Bubble Data
 
+Here we plot the positive and negative bubble indicators along with the thresholds at which they will trigger an allocation signal for our strategy. Note, the thresholds have been chosen rather arbitrarily.
+
 ```{r}
-ggplot(bubble_df, aes(x=as.Date(time))) + geom_line(aes(y=price)) + geom_line(aes(y=pos_conf, color='green')) + geom_line(aes(y=neg_conf*-1, color='red'))
+ggplot(bubble_df, aes(x=Date)) + 
+  geom_line(aes(y=price)) + 
+  geom_line(aes(y=conf), color='red') + 
+  geom_hline(yintercept=c(POS_BUBBLE_THRESHOLD, -NEG_BUBBLE_THRESHOLD), color='grey', linetype = "dashed")
+
 ```
 
 ## Construct Bubble Portfolio
 
 ```{r}
-# TODO join data frames. df + bubble df on date
+# join data frames. df + bubble df on date
+m_df <- merge(df_pct_chg, bubble_df, by='Date')
 
-bubble_df$conf = bubble_df$pos_conf - bubble_df$neg_conf
-
-bubble_df %>% mutate(BubblePortfolio = case_when(
-  conf >= POS_BUBBLE_THRESHOLD ~ 'Risk Off', 
-  conf <= -NEG_BUBBLE_THRESHOLD ~ 'Risk On',
-  -NEG_BUBBLE_THRESHOLD < conf & conf < POS_BUBBLE_THRESHOLD ~ 'Equal Weight'
+m_df <- m_df %>% mutate(BubblePortfolio = case_when(
+  conf <= POS_BUBBLE_THRESHOLD ~ ((m_df$TLT.Adj.Close * .5) + (m_df$AGG.Adj.Close * .5)), 
+  conf >= -NEG_BUBBLE_THRESHOLD ~ ((m_df$VTI.Adj.Close * .333) + (m_df$VBR.Adj.Close * .333) + (m_df$VTV.Adj.Close * .333)),
+  -NEG_BUBBLE_THRESHOLD < conf & conf < POS_BUBBLE_THRESHOLD ~ ((m_df$VTI.Adj.Close *.2) + (m_df$VBR.Adj.Close * .2) + (m_df$VTV.Adj.Close * .2) + (m_df$TLT.Adj.Close * .2) + (m_df$AGG.Adj.Close * .2))
 ))
-bubble_df
+
+m_df$BubblePortfolioCumulativeReturns <- cumprod(1+m_df$BubblePortfolio)-1
+
+ggplot(m_df, aes(x=Date)) + 
+  geom_line(aes(y=BenchmarkCumulativeReturns), color='red') + 
+  geom_line(aes(y=BubblePortfolioCumulativeReturns), color='green') +
+  labs(x="Date", y="Cumulative Returns Benchmark (red)\nvs\nBubble Portfolio (green)")
 ```
