@@ -15,6 +15,7 @@ title: "DTSC 5301 Group Project Data Science for Finance"
 -   Om Sai Madala, omma5510\@colrado.edu
 
 -   Anup Bhutada, anbh1796\@colorado.edu
+-   Siddhartha Sankar Katti, siddhartha.katti\@colorado.edu
 
 ## Introduction
 
